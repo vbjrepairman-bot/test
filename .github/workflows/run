@@ -1,0 +1,18 @@
+# Create planner instance
+planner = RetirementPlanner()
+
+# Run analysis
+result = planner.calculate_retirement_projection(
+    current_age=35,
+    retirement_age=65,
+    current_savings=100000,
+    annual_contribution=20000,
+    annual_return=0.08,
+    final_annual_expenses=80000
+)
+
+# Get year-by-year projection
+projection = planner.create_year_by_year_projection(...)
+
+# Create visualizations
+planner.plot_retirement_projection(projection)
