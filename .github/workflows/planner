@@ -1,0 +1,318 @@
+import math
+import pandas as pd
+import matplotlib.pyplot as plt
+from datetime import datetime, timedelta
+from typing import Dict, List, Tuple
+
+class RetirementPlanner:
+    def __init__(self):
+        self.inflation_rate = 0.03  # Default 3% inflation
+        
+    def future_value(self, present_value: float, annual_return: float, years: int) -> float:
+        """Calculate future value with compound interest"""
+        return present_value * (1 + annual_return) ** years
+    
+    def future_value_annuity(self, payment: float, annual_return: float, years: int) -> float:
+        """Calculate future value of regular payments (annuity)"""
+        if annual_return == 0:
+            return payment * years
+        return payment * (((1 + annual_return) ** years - 1) / annual_return)
+    
+    def present_value_of_future_amount(self, future_amount: float, annual_return: float, years: int) -> float:
+        """Calculate present value of a future amount"""
+        return future_amount / (1 + annual_return) ** years
+    
+    def required_annual_contribution(self, target_amount: float, current_savings: float, 
+                                   annual_return: float, years: int) -> float:
+        """Calculate required annual contribution to reach target"""
+        future_value_current = self.future_value(current_savings, annual_return, years)
+        remaining_needed = target_amount - future_value_current
+        
+        if remaining_needed <= 0:
+            return 0
+        
+        if annual_return == 0:
+            return remaining_needed / years
+        
+        return remaining_needed / (((1 + annual_return) ** years - 1) / annual_return)
+    
+    def inflation_adjusted_amount(self, amount: float, years: int, inflation_rate: float = None) -> float:
+        """Adjust amount for inflation"""
+        if inflation_rate is None:
+            inflation_rate = self.inflation_rate
+        return amount * (1 + inflation_rate) ** years
+    
+    def calculate_retirement_projection(self, current_age: int, retirement_age: int,
+                                      current_savings: float, annual_contribution: float,
+                                      annual_return: float, final_annual_expenses: float,
+                                      life_expectancy: int = 85) -> Dict:
+        """
+        Calculate comprehensive retirement projection
+        
+        Args:
+            current_age: Current age
+            retirement_age: Planned retirement age
+            current_savings: Current retirement savings
+            annual_contribution: Annual contribution amount
+            annual_return: Expected annual return (e.g., 0.07 for 7%)
+            final_annual_expenses: Expected annual expenses in today's dollars
+            life_expectancy: Expected life expectancy
+        
+        Returns:
+            Dictionary with retirement analysis
+        """
+        years_to_retirement = retirement_age - current_age
+        years_in_retirement = life_expectancy - retirement_age
+        
+        if years_to_retirement <= 0:
+            raise ValueError("Retirement age must be greater than current age")
+        
+        # Calculate total savings at retirement
+        future_current_savings = self.future_value(current_savings, annual_return, years_to_retirement)
+        future_contributions = self.future_value_annuity(annual_contribution, annual_return, years_to_retirement)
+        total_at_retirement = future_current_savings + future_contributions
+        
+        # Calculate inflation-adjusted annual expenses at retirement
+        expenses_at_retirement = self.inflation_adjusted_amount(final_annual_expenses, years_to_retirement)
+        
+        # Calculate required savings for retirement (considering inflation during retirement)
+        required_savings = self.calculate_required_retirement_savings(
+            expenses_at_retirement, years_in_retirement, annual_return
+        )
+        
+        # Calculate shortfall or surplus
+        shortfall = required_savings - total_at_retirement
+        
+        # Calculate monthly contribution needed if there's a shortfall
+        monthly_contribution_needed = 0
+        if shortfall > 0:
+            annual_needed = self.required_annual_contribution(
+                required_savings, current_savings, annual_return, years_to_retirement
+            )
+            monthly_contribution_needed = annual_needed / 12
+        
+        return {
+            'years_to_retirement': years_to_retirement,
+            'years_in_retirement': years_in_retirement,
+            'current_savings': current_savings,
+            'annual_contribution': annual_contribution,
+            'total_at_retirement': total_at_retirement,
+            'required_savings': required_savings,
+            'shortfall': shortfall,
+            'surplus': -shortfall if shortfall < 0 else 0,
+            'expenses_at_retirement': expenses_at_retirement,
+            'monthly_contribution_needed': monthly_contribution_needed,
+            'is_on_track': shortfall <= 0
+        }
+    
+    def calculate_required_retirement_savings(self, annual_expenses: float, years_in_retirement: int,
+                                            annual_return: float) -> float:
+        """Calculate total savings needed for retirement considering ongoing returns"""
+        total_needed = 0
+        remaining_balance = 0
+        
+        for year in range(years_in_retirement):
+            # Calculate inflation-adjusted expenses for this year
+            year_expenses = annual_expenses * (1 + self.inflation_rate) ** year
+            
+            if year == 0:
+                # First year: need enough to cover expenses plus generate returns
+                remaining_balance = year_expenses
+            else:
+                # Subsequent years: previous balance grows, then expenses are withdrawn
+                remaining_balance = (remaining_balance * (1 + annual_return)) + year_expenses
+        
+        return remaining_balance
+    
+    def create_year_by_year_projection(self, current_age: int, retirement_age: int,
+                                     current_savings: float, annual_contribution: float,
+                                     annual_return: float, annual_expenses: float,
+                                     life_expectancy: int = 85) -> pd.DataFrame:
+        """Create year-by-year projection of savings and withdrawals"""
+        data = []
+        balance = current_savings
+        age = current_age
+        
+        # Accumulation phase
+        while age < retirement_age:
+            balance = balance * (1 + annual_return) + annual_contribution
+            data.append({
+                'age': age,
+                'phase': 'Accumulation',
+                'balance': balance,
+                'contribution': annual_contribution,
+                'withdrawal': 0,
+                'return': balance * annual_return / (1 + annual_return)
+            })
+            age += 1
+        
+        # Retirement phase
+        while age <= life_expectancy:
+            years_into_retirement = age - retirement_age
+            inflation_adjusted_expenses = annual_expenses * (1 + self.inflation_rate) ** years_into_retirement
+            
+            balance = balance * (1 + annual_return) - inflation_adjusted_expenses
+            
+            data.append({
+                'age': age,
+                'phase': 'Retirement',
+                'balance': max(0, balance),  # Can't go negative
+                'contribution': 0,
+                'withdrawal': inflation_adjusted_expenses,
+                'return': balance * annual_return / (1 + annual_return) if balance > 0 else 0
+            })
+            age += 1
+            
+            if balance <= 0:
+                break
+        
+        return pd.DataFrame(data)
+    
+    def plot_retirement_projection(self, projection_df: pd.DataFrame, save_path: str = None):
+        """Create visualization of retirement projection"""
+        plt.figure(figsize=(12, 8))
+        
+        # Plot balance over time
+        plt.subplot(2, 1, 1)
+        accumulation_data = projection_df[projection_df['phase'] == 'Accumulation']
+        retirement_data = projection_df[projection_df['phase'] == 'Retirement']
+        
+        plt.plot(accumulation_data['age'], accumulation_data['balance'], 
+                label='Accumulation Phase', color='green', linewidth=2)
+        plt.plot(retirement_data['age'], retirement_data['balance'], 
+                label='Retirement Phase', color='red', linewidth=2)
+        
+        plt.title('Retirement Savings Projection')
+        plt.xlabel('Age')
+        plt.ylabel('Balance ($)')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.gca().yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'${x:,.0f}'))
+        
+        # Plot contributions and withdrawals
+        plt.subplot(2, 1, 2)
+        plt.bar(accumulation_data['age'], accumulation_data['contribution'], 
+                alpha=0.7, color='green', label='Contributions')
+        plt.bar(retirement_data['age'], -retirement_data['withdrawal'], 
+                alpha=0.7, color='red', label='Withdrawals')
+        
+        plt.title('Annual Contributions and Withdrawals')
+        plt.xlabel('Age')
+        plt.ylabel('Amount ($)')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.gca().yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'${x:,.0f}'))
+        
+        plt.tight_layout()
+        
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        
+        plt.show()
+    
+    def monte_carlo_simulation(self, current_age: int, retirement_age: int,
+                             current_savings: float, annual_contribution: float,
+                             mean_return: float, volatility: float, 
+                             annual_expenses: float, num_simulations: int = 1000) -> Dict:
+        """
+        Run Monte Carlo simulation for retirement planning
+        
+        Args:
+            mean_return: Expected annual return
+            volatility: Standard deviation of returns
+            num_simulations: Number of simulation runs
+        """
+        import numpy as np
+        
+        years_to_retirement = retirement_age - current_age
+        final_balances = []
+        
+        for _ in range(num_simulations):
+            balance = current_savings
+            
+            # Accumulation phase with variable returns
+            for year in range(years_to_retirement):
+                annual_return = np.random.normal(mean_return, volatility)
+                balance = balance * (1 + annual_return) + annual_contribution
+            
+            final_balances.append(balance)
+        
+        final_balances = np.array(final_balances)
+        
+        return {
+            'mean_balance': np.mean(final_balances),
+            'median_balance': np.median(final_balances),
+            'percentile_10': np.percentile(final_balances, 10),
+            'percentile_25': np.percentile(final_balances, 25),
+            'percentile_75': np.percentile(final_balances, 75),
+            'percentile_90': np.percentile(final_balances, 90),
+            'probability_of_success': np.mean(final_balances >= self.calculate_required_retirement_savings(
+                annual_expenses, 85 - retirement_age, mean_return)) * 100
+        }
+
+
+def example_usage():
+    """Example of how to use the RetirementPlanner"""
+    planner = RetirementPlanner()
+    
+    # Example scenario
+    result = planner.calculate_retirement_projection(
+        current_age=30,
+        retirement_age=65,
+        current_savings=50000,
+        annual_contribution=15000,
+        annual_return=0.07,
+        final_annual_expenses=60000,
+        life_expectancy=85
+    )
+    
+    print("=== RETIREMENT ANALYSIS ===")
+    print(f"Years to retirement: {result['years_to_retirement']}")
+    print(f"Current savings: ${result['current_savings']:,.2f}")
+    print(f"Annual contribution: ${result['annual_contribution']:,.2f}")
+    print(f"Total at retirement: ${result['total_at_retirement']:,.2f}")
+    print(f"Required savings: ${result['required_savings']:,.2f}")
+    
+    if result['is_on_track']:
+        print(f"✅ You're on track! Surplus: ${result['surplus']:,.2f}")
+    else:
+        print(f"❌ Shortfall: ${result['shortfall']:,.2f}")
+        print(f"Additional monthly contribution needed: ${result['monthly_contribution_needed']:,.2f}")
+    
+    # Create detailed projection
+    projection = planner.create_year_by_year_projection(
+        current_age=30,
+        retirement_age=65,
+        current_savings=50000,
+        annual_contribution=15000,
+        annual_return=0.07,
+        annual_expenses=60000
+    )
+    
+    print(f"\nProjection created with {len(projection)} years of data")
+    print(projection.head())
+    
+    # Plot the results
+    planner.plot_retirement_projection(projection)
+    
+    # Monte Carlo simulation
+    mc_results = planner.monte_carlo_simulation(
+        current_age=30,
+        retirement_age=65,
+        current_savings=50000,
+        annual_contribution=15000,
+        mean_return=0.07,
+        volatility=0.15,
+        annual_expenses=60000,
+        num_simulations=1000
+    )
+    
+    print("\n=== MONTE CARLO SIMULATION ===")
+    print(f"Mean balance at retirement: ${mc_results['mean_balance']:,.2f}")
+    print(f"10th percentile: ${mc_results['percentile_10']:,.2f}")
+    print(f"90th percentile: ${mc_results['percentile_90']:,.2f}")
+    print(f"Probability of success: {mc_results['probability_of_success']:.1f}%")
+
+
+if __name__ == "__main__":
+    example_usage()
